@@ -16,6 +16,8 @@ import re
 from csv import writer
 from dotenv import load_dotenv
 
+## TODO store xpaths for repeat elements on page as variables
+
 def init_driver(chrome_driver_path):
     # Setup Chrome options for the driver
     options = Options()
@@ -143,7 +145,7 @@ def get_past_date(time_str):
     return past_date.strftime("%-m/%-d/%Y")  # For Unix-like systems
     # return past_date.strftime("%#m/%#d/%Y")  # Use this line instead on Windows
 
-def write_jobs_to_csv(jobs_dict, filename):
+def write_jobs_to_csv(jobs_list, filename, writemode="a"):
     """
     Write a list of job entries (dicts) to a CSV file where:
     - 1st column: "company"
@@ -155,18 +157,19 @@ def write_jobs_to_csv(jobs_dict, filename):
     - 7th column: "job_link"
     - 8th column: "job_description"
     
-    :param jobs_dict: List of dicts, each containing keys:
+    :param jobs_list: List of dicts, each containing keys:
                       'company', 'job_title', 'contacts',
                       'date_applied', 'job_link', 'job_description'
     :param filename:   Output CSV filename (e.g., "jobs.csv")
     """
     headers = ['company', 'staffing company', 'job_title', 'contacts', 'status', 'date_of_last_contact', 'date_applied', 'job_link', 'job_description']
     
-    with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+    with open(filename, writemode, newline='', encoding='utf-8') as csvfile:
         csv_writer = writer(csvfile)
-        csv_writer.writerow(headers)
-        
-        for job in jobs_dict:
+        if writemode == "w":
+            csv_writer.writerow(headers)
+                    
+        for job in jobs_list:
             row = [
                 job.get('company', ''),
                 '',
@@ -223,8 +226,14 @@ stop_job_title = os.getenv("STOP_JOB_TITLE") or input("Please enter the title of
 stop_job_company = os.getenv("STOP_JOB_COMPANY") or input("Please enter the Company assocaited with the final job to include in this tracking CSV (exclusive):")
 
 tracked_jobs = []
+# start blank file
+write_jobs_to_csv(tracked_jobs, "job_list.csv", writemode="w")
+
 curr_job_title = ""
 curr_job_company = ""
+
+## TODO add business logic for Start Job - don't always start from most recently applied job
+## TODO add business logic for writing to CSV progressively each time a job is parsed, so data is less likely to be lost
 
 # while current job is not "stop jobs"
 while not (stop_job_title.strip() == curr_job_title.strip() and stop_job_company.strip() == curr_job_company.strip()):
@@ -243,6 +252,7 @@ while not (stop_job_title.strip() == curr_job_title.strip() and stop_job_company
         curr_job_title = find_element_by_xpath(wait, "(//h1)[1]").text
         curr_job_applied_time_ago = find_element_by_xpath(wait, "//span[@class='post-apply-timeline__entity-time']").text
         curr_job_company = find_element_by_xpath(wait, "(//a)[10]").text
+        print(f"Parsing \"{curr_job_title}\" at \"curr_job_company\"...")
         curr_job_contact1, curr_job_contact2 = "", ""
         
         # only try finding contacts if their expected parent element is present
@@ -255,8 +265,11 @@ while not (stop_job_title.strip() == curr_job_title.strip() and stop_job_company
                 print("Found no 'job contacts' for this job")
                 pass
 
-        find_and_click(wait, '//button[@aria-label="Click to see more description"]')
-        find_element_by_xpath(wait, "//button[@aria-label='Click to see less description']")
+        ## TODO only try clicking on this element if it's present
+        see_more_btn_xpath = '//button[@aria-label="Click to see more description"]'
+        if find_element_by_xpath()
+        find_and_click(wait, see_more_btn_xpath)
+        find_element_by_xpath(wait, see_more_btn_xpath)
 
         ## This needs to be dynamic depending on which type of "job description elements" are present on the page
         curr_job_desc_elements = None
@@ -277,6 +290,9 @@ while not (stop_job_title.strip() == curr_job_title.strip() and stop_job_company
             "job_link" : curr_job_link,
             "job_description" : curr_job_description
         })
+        # log current job to CSV to minimize data loss, we can remove tracked_jobs as master list later if desired..
+        write_jobs_to_csv(tracked_jobs[-1:], "job_list.csv", writemode="a")
+
         # close new tab, go back to old one
         driver.close()
         main_handle = driver.window_handles[0]
@@ -287,10 +303,11 @@ while not (stop_job_title.strip() == curr_job_title.strip() and stop_job_company
             break
     # click to next page of jobs
     find_and_click(wait, '//button[@aria-label="Next"]')
+
 print(tracked_jobs)
 
 # Process scraped jobs
-write_jobs_to_csv(tracked_jobs, "job_list.csv")
+# write_jobs_to_csv(tracked_jobs, "job_list.csv")
 
 
 print("Finished entering all certifications. *IMPORTANT*: You will have to go back & enter dates (day of month) manually.")
