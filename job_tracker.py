@@ -10,6 +10,8 @@ from selenium.common.exceptions import NoSuchElementException, TimeoutException
 from random import uniform as random_uniform, random as random_random
 from urllib.parse import urlsplit, urlunsplit
 from getpass import getpass
+from datetime import datetime, timedelta
+import re
 
 def init_driver(chrome_driver_path):
     # Setup Chrome options for the driver
@@ -30,7 +32,7 @@ def init_driver(chrome_driver_path):
     # Provide a default chromedriver path if not specified
     if not chrome_driver_path:
         print("No path to chromedriver provided. Using default...")
-        chrome_driver_path= '/Users/john/dev/vdi_login/chromedriver/chromedriver'
+        chrome_driver_path= './chromedriver'
 
     # Initialize the Chrome webdriver with the provided path and options
     service = Service(chrome_driver_path)
@@ -42,6 +44,11 @@ def find_element_by_xpath(wait, xpath):
     return wait.until(
         EC.presence_of_element_located((By.XPATH, xpath))
     )
+
+def find_and_click(wait, xpath):
+    element = wait.until(EC.element_to_be_clickable(
+        (By.XPATH, xpath)))
+    element.click()
 
 def fill_textbox_immediate(wait, xpath, input, clear = True):
     # Find the element and optionally clear the input before filling it
@@ -112,47 +119,47 @@ def get_past_date(time_str):
     return past_date.strftime("%-m/%-d/%Y")  # For Unix-like systems
     # return past_date.strftime("%#m/%#d/%Y")  # Use this line instead on Windows
 
-
-# URLs and credentials for LinkedIn login
-cert_claim_url = "https://www.bscemployee.com/certificates/add-certificate-claim/"
-
-linkedin_email = input("Please enter your LinkedIn email: ")
-linkedin_pwd = getpass("Please enter your LinkedIn password: ")
+# linkedin_email = input("Please enter your LinkedIn email: ")
+# linkedin_pwd = getpass("Please enter your LinkedIn password: ")
+linkedin_email = "john@john-pratt.com"
+linkedin_pwd = "bvVsAUnwH730g!6DZlZw"
 linkedin_jobs_url = "https://www.linkedin.com/my-items/saved-jobs/?cardType=APPLIED"
 linkedin_login_url = "https://www.linkedin.com/login/"
 linkedin_feed_url = "https://www.linkedin.com/feed/"
 
 # Initialize Chrome driver path for Selenium
-chrome_driver_path = input("Please download a chromedriver for Selenium to use (https://googlechromelabs.github.io/chrome-for-testing/#stable for the latest version, https://chromedriver.storage.googleapis.com/index.html for old versions). The version number must match your version of Google Chrome. Enter its file path:")
-
+# chrome_driver_path = input("Please download a chromedriver for Selenium to use (https://googlechromelabs.github.io/chrome-for-testing/#stable for the latest version, https://chromedriver.storage.googleapis.com/index.html for old versions). The version number must match your version of Google Chrome. Enter its file path:")
+chrome_driver_path = ""
 # Start LinkedIn session
-linkedin_chromedriver = init_driver(chrome_driver_path)
-linkedin_wait = WebDriverWait(linkedin_chromedriver, 7)
-linkedin_chromedriver.get(linkedin_login_url)
+driver = init_driver(chrome_driver_path)
+wait = WebDriverWait(driver, 7)
+driver.get(linkedin_login_url)
 
 # Log in to LinkedIn with the provided credentials
-fill_textbox(linkedin_wait, "//*[@id='username'][1]", linkedin_email, sleep_min = 0, pause=False)
-linkedin_pwd_ele = fill_textbox(linkedin_wait, "//*[@id='password'][1]", linkedin_pwd, sleep_min = 0, pause=False)
+fill_textbox(wait, "//*[@id='username'][1]", linkedin_email, sleep_min = 0, pause=False)
+linkedin_pwd_ele = fill_textbox(wait, "//*[@id='password'][1]", linkedin_pwd, sleep_min = 0, pause=False)
 linkedin_pwd_ele.send_keys(Keys.ENTER)
 
 # Wait for the LinkedIn feed page to load
 while True:
-    current_url = linkedin_chromedriver.current_url
+    current_url = driver.current_url
     if current_url == linkedin_feed_url:
         print("Page has reached the expected URL!")
         break
     sleep(1)
 
 # Access LinkedIn certifications page
-linkedin_chromedriver.get(linkedin_jobs_url)
-wait_for_page_load(linkedin_chromedriver)
-stop_job_title = input("Please enter the title of the final job to include in this tracking CSV (exclusive):")
-stop_job_company = input("Please enter the Company assocaited with the final job to include in this tracking CSV (exclusive):")
+driver.get(linkedin_jobs_url)
+wait_for_page_load(driver)
+# stop_job_title = input("Please enter the title of the final job to include in this tracking CSV (exclusive):")
+# stop_job_company = input("Please enter the Company assocaited with the final job to include in this tracking CSV (exclusive):")
+stop_job_title = "Platform Engineer"
+stop_job_company = "Marathon TS"
 
 tracked_jobs = []
 curr_job_title = None
 curr_job_company = None
-loaded_jobs_elements = find_element_by_xpath("//ul[@role='list']")
+loaded_jobs_elements = find_element_by_xpath(wait, "//ul[@role='list']").find_elements(By.XPATH, "./*")
 # while current job is not "stop jobs"
 while not (stop_job_title == curr_job_title and stop_job_company == curr_job_company):
     # click on current job to navigate to Detail page
@@ -161,28 +168,47 @@ while not (stop_job_title == curr_job_title and stop_job_company == curr_job_com
         job_id = ele.find_element(By.XPATH,'./*').get_attribute("data-chameleon-result-urn").split(":")[-1]
         # go to job detail page
         curr_job_link = f"linkedin.com/jobs/view/{job_id}"
-        driver.execute_script(f"window.open('{curr_job_link}', '_blank');")
+        driver.execute_script(f"window.open('https://{curr_job_link}', '_blank');")
         driver.switch_to.window(driver.window_handles[-1])
         # 
-        curr_job_title = find_element_by_xpath("(//h1)[1]").text
-        curr_job_applied_time_ago = find_element_by_xpath("//span[@class='post-apply-timeline__entity-time']").text
-        curr_job_company = find_element_by_xpath("(//a)[10]").text
-        curr_job_contact1 = find_element_by_xpath("(//div[contains(@class, 'job-details-people-who-can')])[3]//strong").text
-        curr_job_contact2 = find_element_by_xpath("//div[@class='job-details-people-who-can-help__section']//strong").text
-        curr_job_desc_elements = find_element_by_xpath("(//div[contains(@class, 'jobs-box__html-content')]/*)[2]/*/*/*")
+        curr_job_title = find_element_by_xpath(wait, "(//h1)[1]").text
+        curr_job_applied_time_ago = find_element_by_xpath(wait, "//span[@class='post-apply-timeline__entity-time']").text
+        curr_job_company = find_element_by_xpath(wait, "(//a)[10]").text
+        curr_job_contact1, curr_job_contact2 = "", ""
+        
+        # only try finding contacts if their expected parent element is present
+        # TODO make this business logic more complex so it can instantly tell if there is no Person's full name listed under this section
+        if (len(driver.find_elements(By.XPATH, '//h2[@class="text-heading-large" and text()="People you can reach out to"]')) > 0):
+            try:
+                curr_job_contact1 = find_element_by_xpath(wait, "(//div[contains(@class, 'job-details-people-who-can')])[3]//strong").text
+                curr_job_contact2 = find_element_by_xpath(wait, "//div[@class='job-details-people-who-can-help__section']//strong").text
+            except Exception:
+                print("Found no 'job contacts' for this job")
+                pass
+
+        find_and_click(wait, '//button[@aria-label="Click to see more description"]')
+        find_element_by_xpath(wait, "//button[@aria-label='Click to see less description']")
+        curr_job_desc_elements = find_element_by_xpath(wait, "(//div[contains(@class, 'jobs-box__html-content')]/*)[2]/*/*").find_elements(By.XPATH, "./*")
         curr_job_description = ""
+
         for job_desc_ele in curr_job_desc_elements:
             curr_job_description += (job_desc_ele.text + "\n")
+        
         tracked_jobs.append({
             "company" : curr_job_company,
             "job_title" : curr_job_title,
-            "date_applied" : get_past_date(curr_job_applied_time_ago)
-            "job_posting" : curr_job_link
+            "date_applied" : get_past_date(curr_job_applied_time_ago),
+            "job_posting" : curr_job_link,
             "JD" : curr_job_description
         })
+        # close new tab, go back to old one
+        driver.close()
+        print(tracked_jobs[-1])
+
+print(tracked_jobs)
 
 # Locate the element containing certifications
-div_ele = find_element_by_xpath(linkedin_wait, "//div[contains(@class, 'scaffold-finite-scroll__content')]")
+div_ele = find_element_by_xpath(wait, wait, "//div[contains(@class, 'scaffold-finite-scroll__content')]")
 ul_ele = div_ele.find_element(By.TAG_NAME, 'ul')
 cert_li_eles = ul_ele.find_elements(By.XPATH, './li')  # Find all certifications
 
