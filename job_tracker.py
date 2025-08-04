@@ -12,6 +12,7 @@ from urllib.parse import urlsplit, urlunsplit
 from getpass import getpass
 from datetime import datetime, timedelta
 import re
+from csv import writer
 
 def init_driver(chrome_driver_path):
     # Setup Chrome options for the driver
@@ -96,6 +97,21 @@ def scroll_to_bottom(driver):
         # Update the last height for the next iteration
         last_height = new_height
 
+def get_all_descendant_text(el):
+    """
+    Recursively collects .text from all child/grandchild/etc elements of `el`.
+    Returns a single string with each piece of text concatenated.
+    """
+    texts = []
+    # get direct children
+    children = el.find_elements(By.XPATH, "./*")
+    for child in children:
+        # add this child's own text
+        texts.append(child.text or "")
+        # recurse into its children
+        texts.append(get_all_descendant_text(child))
+    return " ".join(texts)
+
 def get_past_date(time_str):
     now = datetime.now()
 
@@ -119,10 +135,45 @@ def get_past_date(time_str):
     return past_date.strftime("%-m/%-d/%Y")  # For Unix-like systems
     # return past_date.strftime("%#m/%#d/%Y")  # Use this line instead on Windows
 
-# linkedin_email = input("Please enter your LinkedIn email: ")
-# linkedin_pwd = getpass("Please enter your LinkedIn password: ")
-linkedin_email = "john@john-pratt.com"
-linkedin_pwd = "bvVsAUnwH730g!6DZlZw"
+def write_jobs_to_csv(jobs_dict, filename):
+    """
+    Write a list of job entries (dicts) to a CSV file where:
+    - 1st column: "company"
+    - 2nd column: empty
+    - 3rd column: "job_title"
+    - 4th column: "contacts"
+    - 5th column: empty
+    - 6th column: "date_applied"
+    - 7th column: "job_link"
+    - 8th column: "job_description"
+    
+    :param jobs_dict: List of dicts, each containing keys:
+                      'company', 'job_title', 'contacts',
+                      'date_applied', 'job_link', 'job_description'
+    :param filename:   Output CSV filename (e.g., "jobs.csv")
+    """
+    headers = ['company', '', 'job_title', 'contacts', '', 'date_applied', 'job_link', 'job_description']
+    
+    with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(headers)
+        
+        for job in jobs_dict:
+            row = [
+                job.get('company', ''),
+                '',
+                job.get('job_title', ''),
+                job.get('contacts', ''),
+                '',
+                job.get('date_applied', ''),
+                job.get('job_link', ''),
+                job.get('job_description', '')
+            ]
+            writer.writerow(row)
+
+linkedin_email = input("Please enter your LinkedIn email: ")
+linkedin_pwd = getpass("Please enter your LinkedIn password: ")
+
 linkedin_jobs_url = "https://www.linkedin.com/my-items/saved-jobs/?cardType=APPLIED"
 linkedin_login_url = "https://www.linkedin.com/login/"
 linkedin_feed_url = "https://www.linkedin.com/feed/"
@@ -151,17 +202,16 @@ while True:
 # Access LinkedIn certifications page
 driver.get(linkedin_jobs_url)
 wait_for_page_load(driver)
-# stop_job_title = input("Please enter the title of the final job to include in this tracking CSV (exclusive):")
-# stop_job_company = input("Please enter the Company assocaited with the final job to include in this tracking CSV (exclusive):")
-stop_job_title = "Platform Engineer"
-stop_job_company = "Marathon TS"
+stop_job_title = input("Please enter the title of the final job to include in this tracking CSV (exclusive):")
+stop_job_company = input("Please enter the Company assocaited with the final job to include in this tracking CSV (exclusive):")
 
 tracked_jobs = []
 curr_job_title = None
 curr_job_company = None
-loaded_jobs_elements = find_element_by_xpath(wait, "//ul[@role='list']").find_elements(By.XPATH, "./*")
+
 # while current job is not "stop jobs"
 while not (stop_job_title == curr_job_title and stop_job_company == curr_job_company):
+    loaded_jobs_elements = find_element_by_xpath(wait, "//ul[@role='list']").find_elements(By.XPATH, "./*")
     # click on current job to navigate to Detail page
     for ele in loaded_jobs_elements:
         # get LI job id
@@ -188,34 +238,41 @@ while not (stop_job_title == curr_job_title and stop_job_company == curr_job_com
 
         find_and_click(wait, '//button[@aria-label="Click to see more description"]')
         find_element_by_xpath(wait, "//button[@aria-label='Click to see less description']")
-        curr_job_desc_elements = find_element_by_xpath(wait, "(//div[contains(@class, 'jobs-box__html-content')]/*)[2]/*/*").find_elements(By.XPATH, "./*")
-        curr_job_description = ""
 
-        for job_desc_ele in curr_job_desc_elements:
-            curr_job_description += (job_desc_ele.text + "\n")
+        ## This needs to be dynamic depending on which type of "job description elements" are present on the page
+        curr_job_desc_elements = None
+        curr_job_description = ""
+        curr_job_desc_elements = find_element_by_xpath(wait, "//div[contains(@class, 'jobs-box__html-content')]")
+        # if curr_job_desc_elements and len(curr_job_desc_elements) > 0:
+            # for job_desc_ele in curr_job_desc_elements:
+                # curr_job_description += (job_desc_ele.text + "\n")
+        # else:
+        # curr_job_desc_elements = find_element_by_xpath(wait, "//p[@dir='ltr']")
+        curr_job_description = get_all_descendant_text(curr_job_desc_elements)  
         
         tracked_jobs.append({
             "company" : curr_job_company,
             "job_title" : curr_job_title,
+            "contacts" : f"{curr_job_contact1}, {curr_job_contact2}" if curr_job_contact1 or curr_job_contact2 else ""
             "date_applied" : get_past_date(curr_job_applied_time_ago),
-            "job_posting" : curr_job_link,
-            "JD" : curr_job_description
+            "job_link" : curr_job_link,
+            "job_description" : curr_job_description
         })
         # close new tab, go back to old one
         driver.close()
-        print(tracked_jobs[-1])
-
+        main_handle = driver.window_handles[0]
+        driver.switch_to.window(main_handle)
+    # click to next page of jobs
+    find_and_click(wait, '//button[@aria-label="Next"]')
 print(tracked_jobs)
 
 # Locate the element containing certifications
-div_ele = find_element_by_xpath(wait, wait, "//div[contains(@class, 'scaffold-finite-scroll__content')]")
 ul_ele = div_ele.find_element(By.TAG_NAME, 'ul')
 cert_li_eles = ul_ele.find_elements(By.XPATH, './li')  # Find all certifications
 
 # Process certifications
 print(f"Certs found on LinkedIn profile: {len(cert_li_eles)}")
 full_certs = []
-
 
 print(f"ERROR : Failed to add the following certs - {[d['cert_name'] for d in failures]}. Go back & add these manually.")
 
