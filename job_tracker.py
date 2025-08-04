@@ -6,11 +6,12 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from time import sleep
-from selenium.common.exceptions import NoSuchElementException, TimeoutException
+from selenium.common.exceptions import NoSuchElementException, TimeoutException, StaleElementReferenceException
 from random import uniform as random_uniform, random as random_random
 from urllib.parse import urlsplit, urlunsplit
 from getpass import getpass
 from datetime import datetime, timedelta
+import os
 import re
 from csv import writer
 from dotenv import load_dotenv
@@ -41,12 +42,18 @@ def init_driver(chrome_driver_path):
     driver = webdriver.Chrome(service=service, options=options)
     return driver
 
-def find_element_by_xpath(wait, xpath):
-    # Wait for an element to be present in the DOM and return it
-    return wait.until(
-        EC.presence_of_element_located((By.XPATH, xpath))
-    )
+def find_element_by_xpath(wait, xpath, attempts=10, delay=0.1):
+    """
+    Retry wrapper that finds an element by XPath with retries if it becomes stale.
+    """
+    for _ in range(attempts):
+        try:
+            return wait.until(EC.presence_of_element_located((By.XPATH, xpath)))
+        except StaleElementReferenceException:
+            time.sleep(delay)
 
+    raise StaleElementReferenceException(f"Element with XPath '{xpath}' remained stale after {attempts} attempts.")
+    
 def find_and_click(wait, xpath):
     element = wait.until(EC.element_to_be_clickable(
         (By.XPATH, xpath)))
@@ -153,11 +160,11 @@ def write_jobs_to_csv(jobs_dict, filename):
                       'date_applied', 'job_link', 'job_description'
     :param filename:   Output CSV filename (e.g., "jobs.csv")
     """
-    headers = ['company', '', 'job_title', 'contacts', '', 'date_applied', 'job_link', 'job_description']
+    headers = ['company', 'staffing company', 'job_title', 'contacts', 'status', 'date_of_last_contact', 'date_applied', 'job_link', 'job_description']
     
     with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
-        writer = csv.writer(csvfile)
-        writer.writerow(headers)
+        csv_writer = writer(csvfile)
+        csv_writer.writerow(headers)
         
         for job in jobs_dict:
             row = [
@@ -167,15 +174,22 @@ def write_jobs_to_csv(jobs_dict, filename):
                 job.get('contacts', ''),
                 '',
                 job.get('date_applied', ''),
+                job.get('date_applied', ''),
                 job.get('job_link', ''),
                 job.get('job_description', '')
             ]
-            writer.writerow(row)
+            csv_writer.writerow(row)
 
 load_dotenv()
 
 linkedin_email = os.getenv("LINKEDIN_EMAIL") or input("Please enter your LinkedIn email: ")
 linkedin_pwd = os.getenv("LINKEDIN_PWD") or getpass("Please enter your LinkedIn password: ")
+
+if os.getenv("LINKEDIN_EMAIL"):
+    print(f"Pre-filled LI email: {linkedin_email}")
+
+if os.getenv("LINKEDIN_PWD"):
+    print(f"Pre-filled LI pwd: {linkedin_email}")
 
 linkedin_jobs_url = "https://www.linkedin.com/my-items/saved-jobs/?cardType=APPLIED"
 linkedin_login_url = "https://www.linkedin.com/login/"
@@ -209,11 +223,11 @@ stop_job_title = os.getenv("STOP_JOB_TITLE") or input("Please enter the title of
 stop_job_company = os.getenv("STOP_JOB_COMPANY") or input("Please enter the Company assocaited with the final job to include in this tracking CSV (exclusive):")
 
 tracked_jobs = []
-curr_job_title = None
-curr_job_company = None
+curr_job_title = ""
+curr_job_company = ""
 
 # while current job is not "stop jobs"
-while not (stop_job_title == curr_job_title and stop_job_company == curr_job_company):
+while not (stop_job_title.strip() == curr_job_title.strip() and stop_job_company.strip() == curr_job_company.strip()):
     loaded_jobs_elements = find_element_by_xpath(wait, "//ul[@role='list']").find_elements(By.XPATH, "./*")
     # click on current job to navigate to Detail page
     for ele in loaded_jobs_elements:
@@ -223,7 +237,9 @@ while not (stop_job_title == curr_job_title and stop_job_company == curr_job_com
         curr_job_link = f"linkedin.com/jobs/view/{job_id}"
         driver.execute_script(f"window.open('https://{curr_job_link}', '_blank');")
         driver.switch_to.window(driver.window_handles[-1])
-        # 
+        
+        # wait indefinitely for job page to load before trying to parse it 
+        wait_for_page_load(driver)
         curr_job_title = find_element_by_xpath(wait, "(//h1)[1]").text
         curr_job_applied_time_ago = find_element_by_xpath(wait, "//span[@class='post-apply-timeline__entity-time']").text
         curr_job_company = find_element_by_xpath(wait, "(//a)[10]").text
@@ -265,19 +281,17 @@ while not (stop_job_title == curr_job_title and stop_job_company == curr_job_com
         driver.close()
         main_handle = driver.window_handles[0]
         driver.switch_to.window(main_handle)
+
+        # break for loop if Stop Job was found:
+        if (stop_job_title.strip() == curr_job_title.strip() and stop_job_company.strip() == curr_job_company.strip()):
+            break
     # click to next page of jobs
     find_and_click(wait, '//button[@aria-label="Next"]')
 print(tracked_jobs)
 
-# Locate the element containing certifications
-ul_ele = div_ele.find_element(By.TAG_NAME, 'ul')
-cert_li_eles = ul_ele.find_elements(By.XPATH, './li')  # Find all certifications
+# Process scraped jobs
+write_jobs_to_csv(tracked_jobs, "job_list.csv")
 
-# Process certifications
-print(f"Certs found on LinkedIn profile: {len(cert_li_eles)}")
-full_certs = []
-
-print(f"ERROR : Failed to add the following certs - {[d['cert_name'] for d in failures]}. Go back & add these manually.")
 
 print("Finished entering all certifications. *IMPORTANT*: You will have to go back & enter dates (day of month) manually.")
 print("Please validate that no extra certifications were added in error.")
