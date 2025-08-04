@@ -13,6 +13,7 @@ from getpass import getpass
 from datetime import datetime, timedelta
 import re
 from csv import writer
+from dotenv import load_dotenv
 
 def init_driver(chrome_driver_path):
     # Setup Chrome options for the driver
@@ -171,8 +172,10 @@ def write_jobs_to_csv(jobs_dict, filename):
             ]
             writer.writerow(row)
 
-linkedin_email = input("Please enter your LinkedIn email: ")
-linkedin_pwd = getpass("Please enter your LinkedIn password: ")
+load_dotenv()
+
+linkedin_email = os.getenv("LINKEDIN_EMAIL") or input("Please enter your LinkedIn email: ")
+linkedin_pwd = os.getenv("LINKEDIN_PWD") or getpass("Please enter your LinkedIn password: ")
 
 linkedin_jobs_url = "https://www.linkedin.com/my-items/saved-jobs/?cardType=APPLIED"
 linkedin_login_url = "https://www.linkedin.com/login/"
@@ -202,8 +205,8 @@ while True:
 # Access LinkedIn certifications page
 driver.get(linkedin_jobs_url)
 wait_for_page_load(driver)
-stop_job_title = input("Please enter the title of the final job to include in this tracking CSV (exclusive):")
-stop_job_company = input("Please enter the Company assocaited with the final job to include in this tracking CSV (exclusive):")
+stop_job_title = os.getenv("STOP_JOB_TITLE") or input("Please enter the title of the final job to include in this tracking CSV (exclusive):")
+stop_job_company = os.getenv("STOP_JOB_COMPANY") or input("Please enter the Company assocaited with the final job to include in this tracking CSV (exclusive):")
 
 tracked_jobs = []
 curr_job_title = None
@@ -253,7 +256,7 @@ while not (stop_job_title == curr_job_title and stop_job_company == curr_job_com
         tracked_jobs.append({
             "company" : curr_job_company,
             "job_title" : curr_job_title,
-            "contacts" : f"{curr_job_contact1}, {curr_job_contact2}" if curr_job_contact1 or curr_job_contact2 else ""
+            "contacts" : f"{curr_job_contact1}, {curr_job_contact2}" if curr_job_contact1 or curr_job_contact2 else "",
             "date_applied" : get_past_date(curr_job_applied_time_ago),
             "job_link" : curr_job_link,
             "job_description" : curr_job_description

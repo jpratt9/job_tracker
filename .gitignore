@@ -208,4 +208,6 @@ __marimo__/
 
 chromedriver
 google-chrome-stable_current_amd64.deb
-bak
+
+# for storing secrets not tracked by git
+.env
