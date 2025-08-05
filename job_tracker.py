@@ -1,3 +1,5 @@
+import undetected_chromedriver as uc
+
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -20,11 +22,14 @@ from dotenv import load_dotenv
 
 def init_driver(chrome_driver_path):
     # Setup Chrome options for the driver
-    options = Options()
+    options = uc.ChromeOptions()
+
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-blink-features=AutomationControlled')
     options.add_argument("--start-maximized")  # Maximize the browser window
     options.add_argument("--incognito")  # Start Chrome in incognito mode
     options.add_argument("--disable-webrtc")  # Disable WebRTC to prevent IP leaks
-    options.add_experimental_option("excludeSwitches", ["enable-logging", "enable-devtools"])  # Disable unnecessary logging
+    # options.add_experimental_option("excludeSwitches", ["enable-logging", "enable-devtools"])  # Disable unnecessary logging
     options.add_argument("--disable-logging")  # Further disable Chrome logging
     options.add_argument("--disable-dev-shm-usage")  # Disable shared memory to avoid errors
     options.add_argument("--disable-extensions")  # Disable Chrome extensions
@@ -41,7 +46,8 @@ def init_driver(chrome_driver_path):
 
     # Initialize the Chrome webdriver with the provided path and options
     service = Service(chrome_driver_path)
-    driver = webdriver.Chrome(service=service, options=options)
+    # driver = uc.Chrome(service=service, options=options)
+    driver = uc.Chrome(options=options)
     return driver
 
 def find_element_by_xpath(wait, xpath, attempts=10, delay=0.1):
@@ -55,11 +61,69 @@ def find_element_by_xpath(wait, xpath, attempts=10, delay=0.1):
             time.sleep(delay)
 
     raise StaleElementReferenceException(f"Element with XPath '{xpath}' remained stale after {attempts} attempts.")
+
+def find_and_click_element_with_offset(element, offset_x_pct, offset_y_pct):
+    # print(element.get_attribute('outerHTML'))
+    if offset_x_pct < 0 or offset_x_pct > 1:
+        print("offset_x_pct for find_and_click_with_offset must be between 0 and 1.")
+        raise MoveTargetOutOfBoundsException
+    if offset_y_pct < 0 or offset_y_pct > 1:
+        print("offset_y_pct for find_and_click_with_offset must be between 0 and 1.")
+        raise MoveTargetOutOfBoundsException
     
-def find_and_click(wait, xpath):
+    actions = ActionChains(driver)
+
+    # Calculate the initial offset_x based on the percentage
+    initial_offset_x = int(element.size['width'] * offset_x_pct)
+    # Ensure offset_x is at least 1 and at most element.size['width'] - 1
+    offset_x = max(1, min(initial_offset_x, element.size['width'] - 1))
+    # Calculate the initial offset_y based on the percentage
+    initial_offset_y = int(element.size['height'] * offset_x_pct)
+    # Ensure offset_y is at least 1 and at most element.size['height'] - 1
+    offset_y = max(1, min(initial_offset_y, element.size['height'] - 1))
+
+    # Perform the click and hold action, after moving to a random part of element
+    actions.move_to_element_with_offset(element, offset_x, offset_y)
+    click_location = (element.location['x'] + offset_x, \
+                      element.location['y'] + offset_y, )
+    
+    driver.execute_script(js_click_indicator, *click_location)
+    actions.click_and_hold().perform()
+
+    # Generate a random duration for the hold
+    sleep(random_uniform(0.05, 0.2))
+
+    # Release the mouse click
+    actions.release()
+    actions.perform()
+    sleep(random_uniform(0.05, 0.1))
+    
+    return element
+
+def find_and_click_with_offset(wait, xpath, offset_x_pct, offset_y_pct):
     element = wait.until(EC.element_to_be_clickable(
         (By.XPATH, xpath)))
-    element.click()
+    element = find_and_click_element_with_offset(element, offset_x_pct, offset_y_pct)
+    sleep(random_uniform(0.2, 0.4))
+    return element
+
+def find_and_click(wait, xpath):
+    # wait for element to be "clickable"
+    element = wait.until(EC.element_to_be_clickable(
+        (By.XPATH, xpath)))
+
+    # Calculate random coordinates within the element's dimensions
+    random_x_pct = random_uniform(0, 0.5)
+    random_y_pct = random_uniform(0, 0.5)
+    sleep(random_uniform(0.2, 0.4))
+    return find_and_click_with_offset(driver, wait, xpath, \
+                                      random_x_pct, random_y_pct)
+
+# def find_and_click(wait, xpath):
+#     sleep(random_uniform(0.1, 0.3))
+#     element = wait.until(EC.element_to_be_clickable(
+#         (By.XPATH, xpath)))
+#     element.click()
 
 def fill_textbox_immediate(wait, xpath, input, clear = True):
     # Find the element and optionally clear the input before filling it
@@ -252,11 +316,13 @@ while not (stop_job_title.strip() == curr_job_title.strip() and stop_job_company
         curr_job_title = find_element_by_xpath(wait, "(//h1)[1]").text
         curr_job_applied_time_ago = find_element_by_xpath(wait, "//span[@class='post-apply-timeline__entity-time']").text
         curr_job_company = find_element_by_xpath(wait, "(//a)[10]").text
-        print(f"Parsing \"{curr_job_title}\" at \"curr_job_company\"...")
+        print(f"Parsing \"{curr_job_title}\" at \"{curr_job_company}\"...")
         curr_job_contact1, curr_job_contact2 = "", ""
         
         # only try finding contacts if their expected parent element is present
         # TODO make this business logic more complex so it can instantly tell if there is no Person's full name listed under this section
+
+        ## Seems like "See more" button indicates
         if (len(driver.find_elements(By.XPATH, '//h2[@class="text-heading-large" and text()="People you can reach out to"]')) > 0):
             try:
                 curr_job_contact1 = find_element_by_xpath(wait, "(//div[contains(@class, 'job-details-people-who-can')])[3]//strong").text
@@ -266,10 +332,9 @@ while not (stop_job_title.strip() == curr_job_title.strip() and stop_job_company
                 pass
 
         ## TODO only try clicking on this element if it's present
-        see_more_btn_xpath = '//button[@aria-label="Click to see more description"]'
-        if find_element_by_xpath()
+        see_more_btn_xpath = "//button[contains(@aria-label, 'see more')]"
+        # if find_element_by_xpath()
         find_and_click(wait, see_more_btn_xpath)
-        find_element_by_xpath(wait, see_more_btn_xpath)
 
         ## This needs to be dynamic depending on which type of "job description elements" are present on the page
         curr_job_desc_elements = None
