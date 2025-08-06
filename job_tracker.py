@@ -1,4 +1,4 @@
-import undetected_chromedriver as uc
+# import undetected_chromedriver as uc
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -8,6 +8,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from time import sleep
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.common.exceptions import NoSuchElementException, TimeoutException, StaleElementReferenceException
 from random import uniform as random_uniform, random as random_random
 from urllib.parse import urlsplit, urlunsplit
@@ -18,21 +19,56 @@ import re
 from csv import writer
 from dotenv import load_dotenv
 
+js_click_indicator = """
+function showClickIndicator(x, y, offsetX = 0, offsetY = 0) {
+    var clickIndicator = document.createElement('div');
+    clickIndicator.style.position = 'absolute';
+    clickIndicator.style.left = (x - offsetX) + 'px';  // Adjust by iframe's offset
+    clickIndicator.style.top = (y - offsetY) + 'px';   // Adjust by iframe's offset
+    clickIndicator.style.width = '10px';
+    clickIndicator.style.height = '10px';
+    clickIndicator.style.backgroundColor = 'red';
+    clickIndicator.style.borderRadius = '50%';
+    clickIndicator.style.zIndex = '10000';
+    document.body.appendChild(clickIndicator);
+
+    setTimeout(function() {
+        clickIndicator.remove();
+    }, 100);
+}
+showClickIndicator(arguments[0], arguments[1], arguments[2], arguments[3]);
+"""
+
 ## TODO store xpaths for repeat elements on page as variables
 
 def init_driver(chrome_driver_path):
     # Setup Chrome options for the driver
-    options = uc.ChromeOptions()
+    options = Options()
 
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-blink-features=AutomationControlled')
     options.add_argument("--start-maximized")  # Maximize the browser window
     options.add_argument("--incognito")  # Start Chrome in incognito mode
     options.add_argument("--disable-webrtc")  # Disable WebRTC to prevent IP leaks
+    options.add_argument('--handle_prefs') # This step is dedicated to the undetected_chromedriver
+    options.add_argument("--disable-popup-blocking")
+    # options.add_experimental_option("prefs", prefs)
     # options.add_experimental_option("excludeSwitches", ["enable-logging", "enable-devtools"])  # Disable unnecessary logging
     options.add_argument("--disable-logging")  # Further disable Chrome logging
     options.add_argument("--disable-dev-shm-usage")  # Disable shared memory to avoid errors
     options.add_argument("--disable-extensions")  # Disable Chrome extensions
+
+    # add real user agent so webdriver appears more human-like
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ...")
+
+    # use a chrome profile to make browser appear more human-like
+    profile_path = os.path.abspath("./chrome_profile")
+    options.add_argument(f"user-data-dir={profile_path}")
+
+    # start browser with semi-random window size, to appear more human-like
+    s = random_uniform(0.5, (1/3)**0.5)
+    w, h = int(3840 * s), int(2160 * s)
+    options.add_argument(f"--window-size={w},{h}")
 
     # Disable WebRTC IP handling to ensure no leaks
     options.add_experimental_option("prefs", {
@@ -46,11 +82,19 @@ def init_driver(chrome_driver_path):
 
     # Initialize the Chrome webdriver with the provided path and options
     service = Service(chrome_driver_path)
-    # driver = uc.Chrome(service=service, options=options)
-    driver = uc.Chrome(options=options)
+    driver = webdriver.Chrome(service=service, options=options)
+    driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+        "source": """
+            Object.defineProperty(navigator, 'webdriver', {
+            get: () => undefined
+            })
+        """
+    })
+
+    # driver = uc.Chrome(options=options)
     return driver
 
-def find_element_by_xpath(wait, xpath, attempts=10, delay=0.1):
+def find_element_by_xpath(wait, xpath, attempts=30, delay=0.1):
     """
     Retry wrapper that finds an element by XPath with retries if it becomes stale.
     """
@@ -116,14 +160,7 @@ def find_and_click(wait, xpath):
     random_x_pct = random_uniform(0, 0.5)
     random_y_pct = random_uniform(0, 0.5)
     sleep(random_uniform(0.2, 0.4))
-    return find_and_click_with_offset(driver, wait, xpath, \
-                                      random_x_pct, random_y_pct)
-
-# def find_and_click(wait, xpath):
-#     sleep(random_uniform(0.1, 0.3))
-#     element = wait.until(EC.element_to_be_clickable(
-#         (By.XPATH, xpath)))
-#     element.click()
+    return find_and_click_with_offset(wait, xpath, random_x_pct, random_y_pct)
 
 def fill_textbox_immediate(wait, xpath, input, clear = True):
     # Find the element and optionally clear the input before filling it
@@ -140,7 +177,9 @@ def fill_textbox(wait, xpath, input, sleep_min = 0, pause = True):
     for char in input:
         element.send_keys(char)
         if pause:
-            sleep(random_uniform(sleep_min+0.1, sleep_min+0.3))  # Add a delay between key presses to mimic typing
+            sleeptime = random_uniform(sleep_min+0.1, sleep_min+0.3)
+            sleep(sleeptime)  # Add a delay between key presses to mimic typing
+            # print(f"slept for {sleeptime} seconds between keystrokes")
         element = find_element_by_xpath(wait, xpath)
     return element
 
@@ -149,27 +188,6 @@ def wait_for_page_load(driver):
     while True:
         if driver.execute_script("return document.readyState") == "complete":
             break
-
-def scroll_to_bottom(driver):
-    # Scroll to the bottom of the page to load additional content
-    last_height = driver.execute_script("return document.body.scrollHeight")
-
-    while True:
-        # Scroll to the bottom of the page
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        
-        # Wait for the new content to load
-        sleep(2)
-        
-        # Calculate new scroll height and compare with the last height
-        new_height = driver.execute_script("return document.body.scrollHeight")
-        
-        # Break the loop if no new content is loaded
-        if new_height == last_height:
-            break
-        
-        # Update the last height for the next iteration
-        last_height = new_height
 
 def get_all_descendant_text(el):
     """
@@ -255,9 +273,6 @@ linkedin_pwd = os.getenv("LINKEDIN_PWD") or getpass("Please enter your LinkedIn 
 if os.getenv("LINKEDIN_EMAIL"):
     print(f"Pre-filled LI email: {linkedin_email}")
 
-if os.getenv("LINKEDIN_PWD"):
-    print(f"Pre-filled LI pwd: {linkedin_email}")
-
 linkedin_jobs_url = "https://www.linkedin.com/my-items/saved-jobs/?cardType=APPLIED"
 linkedin_login_url = "https://www.linkedin.com/login/"
 linkedin_feed_url = "https://www.linkedin.com/feed/"
@@ -268,26 +283,30 @@ chrome_driver_path = ""
 # Start LinkedIn session
 driver = init_driver(chrome_driver_path)
 wait = WebDriverWait(driver, 7)
-driver.get(linkedin_login_url)
-
-# Log in to LinkedIn with the provided credentials
-fill_textbox(wait, "//*[@id='username'][1]", linkedin_email, sleep_min = 0, pause=False)
-linkedin_pwd_ele = fill_textbox(wait, "//*[@id='password'][1]", linkedin_pwd, sleep_min = 0, pause=False)
-linkedin_pwd_ele.send_keys(Keys.ENTER)
-
-# Wait for the LinkedIn feed page to load
-while True:
-    current_url = driver.current_url
-    if current_url == linkedin_feed_url:
-        print("Page has reached the expected URL!")
-        break
-    sleep(1)
-
-# Access LinkedIn certifications page
 driver.get(linkedin_jobs_url)
 wait_for_page_load(driver)
+
+# if we need to,
+if "login" in driver.current_url:
+    # Log in to LinkedIn with the provided credentials
+    fill_textbox(wait, "//*[@id='username'][1]", linkedin_email, sleep_min = 0.2, pause=False)
+    linkedin_pwd_ele = fill_textbox(wait, "//*[@id='password'][1]", linkedin_pwd, sleep_min = 0, pause=True)
+    linkedin_pwd_ele.send_keys(Keys.ENTER)
+
+    # Wait for the LinkedIn feed page to load
+    while True:
+        current_url = driver.current_url
+        if current_url == linkedin_jobs_url:
+            print("Page has reached the expected URL!")
+            break
+        sleep(1)
+
+# Access LinkedIn Applied Jobs page
+print("Waiting for job list page to load...")
+wait_for_page_load(driver)
 stop_job_title = os.getenv("STOP_JOB_TITLE") or input("Please enter the title of the final job to include in this tracking CSV (exclusive):")
-stop_job_company = os.getenv("STOP_JOB_COMPANY") or input("Please enter the Company assocaited with the final job to include in this tracking CSV (exclusive):")
+stop_job_company = os.getenv("STOP_JOB_COMPANY") or input("Please enter the Company of the final job to include in this tracking CSV (exclusive):")
+print("Successfully loaded Stop Job details!")
 
 tracked_jobs = []
 # start blank file
@@ -297,13 +316,27 @@ curr_job_title = ""
 curr_job_company = ""
 
 ## TODO add business logic for Start Job - don't always start from most recently applied job
-## TODO add business logic for writing to CSV progressively each time a job is parsed, so data is less likely to be lost
+# start_job_title = os.getenv("START_JOB_TITLE") or input("Please enter the Title of the *first* job to include in this tracking CSV (exclusive):")
+# start_job_company = os.getenv("START_JOB_COMPANY") or input("Please enter the Company of the final job to include in this tracking CSV (exclusive):")
 
+# start_job_found = False
+# start_job_found = True
 # while current job is not "stop jobs"
 while not (stop_job_title.strip() == curr_job_title.strip() and stop_job_company.strip() == curr_job_company.strip()):
+    print(f"Attempting to load all Job elements on Job List page...")
     loaded_jobs_elements = find_element_by_xpath(wait, "//ul[@role='list']").find_elements(By.XPATH, "./*")
+    print(f"All Job elements on Job List page loaded!")
+    # "quick & dirty" search through all jobs on current page until we find "start" job
+    
+    # for ele in loaded_jobs_elements:
+    #     job_txt = get_all_descendant_text(ele)
+    #     if start_job_title in job_txt and start_job_company in job_txt:
+    #         start_job_found = True
+
+    # if start_job_found:
     # click on current job to navigate to Detail page
     for ele in loaded_jobs_elements:
+
         # get LI job id
         job_id = ele.find_element(By.XPATH,'./*').get_attribute("data-chameleon-result-urn").split(":")[-1]
         # go to job detail page
@@ -314,9 +347,12 @@ while not (stop_job_title.strip() == curr_job_title.strip() and stop_job_company
         # wait indefinitely for job page to load before trying to parse it 
         wait_for_page_load(driver)
         curr_job_title = find_element_by_xpath(wait, "(//h1)[1]").text
-        curr_job_applied_time_ago = find_element_by_xpath(wait, "//span[@class='post-apply-timeline__entity-time']").text
         curr_job_company = find_element_by_xpath(wait, "(//a)[10]").text
+        
         print(f"Parsing \"{curr_job_title}\" at \"{curr_job_company}\"...")
+        
+        curr_job_applied_time_ago = find_element_by_xpath(wait, "//span[@class='post-apply-timeline__entity-time']").text
+        
         curr_job_contact1, curr_job_contact2 = "", ""
         
         # only try finding contacts if their expected parent element is present
@@ -340,11 +376,6 @@ while not (stop_job_title.strip() == curr_job_title.strip() and stop_job_company
         curr_job_desc_elements = None
         curr_job_description = ""
         curr_job_desc_elements = find_element_by_xpath(wait, "//div[contains(@class, 'jobs-box__html-content')]")
-        # if curr_job_desc_elements and len(curr_job_desc_elements) > 0:
-            # for job_desc_ele in curr_job_desc_elements:
-                # curr_job_description += (job_desc_ele.text + "\n")
-        # else:
-        # curr_job_desc_elements = find_element_by_xpath(wait, "//p[@dir='ltr']")
         curr_job_description = get_all_descendant_text(curr_job_desc_elements)  
         
         tracked_jobs.append({
